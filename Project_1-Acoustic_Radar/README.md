@@ -20,8 +20,14 @@ radar_acustico/
 │   └── visualizer.py          # Generación y guardado de gráficas
 ├── main_parte2_fft.py         # Orquesta la Parte 2
 ├── main_parte3_ecos.py        # Orquesta la Parte 3
-├── main.py                    # Ejecuta ambas partes
-└── requirements.txt
+└── main.py                    # Ejecuta ambas partes
+```
+
+## Requerimientos
+
+```bash
+numpy>=1.24
+matplotlib>=3.7
 ```
 
 ## Instalación
