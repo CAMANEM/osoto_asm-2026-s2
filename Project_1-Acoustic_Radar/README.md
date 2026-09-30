@@ -41,26 +41,29 @@ Figuras → `outputs/images/`.
 1. Abre `firmware/acoustic_radar/acoustic_radar.ino` en Arduino IDE.
 2. Sube al Uno.
 3. Serial Monitor a **9600 baud**.
-4. Envía `M` + Enter → una medición (FFT peak + correlación + distancia).
-5. Envía `D` + Enter → dump CSV de la última captura.
+4. Al arrancar entra en **modo continuo** (mide en bucle + filtro EMA).
+5. Abre **Serial Plotter** (9600) para ver `raw_cm` y `filt_cm` en vivo.
+6. Comandos: `C` continuo ON · `X` parar · `M` detalle · `D` dump CSV · `S` OFF.
 
-Salida típica:
+Salida continua (Serial Plotter):
 
 ```
---- Medicion ---
-FFT_peak_Hz=3000.0
-lag_samples=23
-corr_peak=...
-tau_ms=3.875
-distancia_cm=66.5
-distancia_m=0.665
-OK
+raw_cm:52.1,filt_cm:50.8,lag:47,peak:...
+raw_cm:49.3,filt_cm:50.2,lag:46,peak:...
 ```
 
-### Host Python (correlación FFT con tu código de Partes 2–3)
+### Host Python (correlación FFT — teoría Partes 2–3)
+
+El host reconstruye el mismo chirp lineal y aplica:
+
+`r = IFFT( conj(FFT(ref)) * FFT(rx) )`
+
+con la FFT propia del proyecto (`signal_processing/`).
 
 ```bash
-# Detecta el puerto (Linux): ls /dev/ttyACM*  o  /dev/ttyUSB*
+# Windows (ejemplo):
+python host/radar_serial.py --port COM3
+# Linux:
 python host/radar_serial.py --port /dev/ttyACM0
 ```
 
@@ -70,7 +73,7 @@ O pega el dump Serial en un archivo:
 python host/radar_serial.py --file captura.txt
 ```
 
-Figuras → `outputs/images_parte4/`.
+Figuras → `outputs/images_parte4/` (chirp de referencia, RX, correlación directa vs FFT).
 
 ### Prueba de defensa (rápida)
 1. Objeto rígido (caja/libro) a **~50 cm** y luego **~100 cm**.
@@ -80,10 +83,11 @@ Figuras → `outputs/images_parte4/`.
    (no esperes precisión de cm exactos en el MVP).
 
 ### Parámetros ajustables en el `.ino`
-| Constante   | Default | Efecto                                      |
-|-------------|---------|---------------------------------------------|
-| `F0_HZ`     | 3000    | Frecuencia del pulso TX                     |
-| `BLANK_MS`  | 1       | Espera antes de muestrear                   |
-| `MIN_LAG`   | 8       | Ignora acoplamiento directo (~1 ms)         |
-| `N_SAMPLES` | 256     | Ventana RX (~32 ms ≈ hasta ~5 m teóricos)   |
-| `FS_HZ`     | 8000    | Muestreo (coherente con `SAMPLE_US=125`)    |
+| Constante        | Default | Efecto                                              |
+|------------------|---------|-----------------------------------------------------|
+| `F_START_HZ`     | 2000    | Inicio del chirp lineal (Hz)                        |
+| `F_END_HZ`       | 7000    | Fin del chirp (bajo Nyquist a 16 kHz)               |
+| `CHIRP_MS`       | 10      | Duración del chirp (más largo que el tono de 1 ms)  |
+| `MIN_LAG`        | 24      | Ignora acoplamiento directo (~1.5 ms)               |
+| `N_SAMPLES`      | 320     | Ventana RX (~20 ms ≈ hasta ~3.4 m teóricos)         |
+| `FS_HZ`          | 16000   | Muestreo (coherente con `SAMPLE_US=62`)             |

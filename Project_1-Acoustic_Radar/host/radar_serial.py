@@ -4,12 +4,18 @@ host/radar_serial.py
 
 Lee una captura del Arduino (comando Serial 'D') y estima el retardo
 del eco con la correlación directa y la correlación por FFT propias
-del proyecto (Partes 2–3), calculando la distancia monostática.
+del proyecto (Partes 2–3), según la teoría del curso:
+
+    r = IFFT( conj(FFT(ref_chirp)) * FFT(rx) )
+
+La señal de referencia es un chirp lineal (misma f0, f1 y duración que
+el firmware), no un tono corto.
 
 Uso:
   1) Sube firmware/acoustic_radar/acoustic_radar.ino
   2) En Serial Monitor: M  (medir) luego D (dump), o:
-  3) python host/radar_serial.py --port /dev/ttyACM0
+  3) python host/radar_serial.py --port COM3   (Windows)
+     python host/radar_serial.py --port /dev/ttyACM0
 
 También acepta un archivo de dump guardado:
   python host/radar_serial.py --file captura.txt
@@ -33,10 +39,13 @@ if str(ROOT) not in sys.path:
 from generation.signal_generator import AcousticSignalGenerator
 from signal_processing.correlator import EchoCorrelator
 
+SPEED_OF_SOUND_M_S = 343.0
+
 
 def parse_dump_text(text: str) -> tuple[dict, np.ndarray]:
     """
     Parsea el bloque BEGIN_SAMPLES ... END_SAMPLES del firmware.
+    Metadatos: líneas KEY=VALUE; el resto son muestras ADC centradas.
     """
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     meta: dict = {}
@@ -54,7 +63,7 @@ def parse_dump_text(text: str) -> tuple[dict, np.ndarray]:
             break
         if not inside:
             continue
-        if "=" in ln and not ln[0].lstrip("-").isdigit():
+        if "=" in ln and not ln.lstrip("-").replace(".", "", 1).isdigit():
             key, val = ln.split("=", 1)
             meta[key] = float(val) if "." in val else int(val)
         else:
@@ -65,7 +74,7 @@ def parse_dump_text(text: str) -> tuple[dict, np.ndarray]:
     return meta, np.asarray(values, dtype=float)
 
 
-def read_from_serial(port: str, baud: int = 9600, timeout_s: float = 8.0) -> str:
+def read_from_serial(port: str, baud: int = 9600, timeout_s: float = 12.0) -> str:
     try:
         import serial  # type: ignore
     except ImportError as exc:
@@ -77,7 +86,7 @@ def read_from_serial(port: str, baud: int = 9600, timeout_s: float = 8.0) -> str
         time.sleep(2.0)  # reset USB del Uno
         ser.reset_input_buffer()
         ser.write(b"M\n")
-        time.sleep(0.8)
+        time.sleep(1.2)  # chirp 10 ms + correlación onboard
         ser.write(b"D\n")
 
         buf = ""
@@ -95,20 +104,28 @@ def read_from_serial(port: str, baud: int = 9600, timeout_s: float = 8.0) -> str
 def estimate_distance(
     received: np.ndarray,
     fs: float,
-    f0: float,
-    blank_ms: float,
+    f_start: float,
+    f_end: float,
+    chirp_ms: float,
     min_lag: int,
-    pulse_ms: float = 5.0,
 ) -> dict:
+    """
+    Réplica la Parte 3 del adelanto sobre una captura real:
+    referencia = chirp lineal; retardo = argmax |correlación|;
+    d = (vs * tau) / 2.
+    """
     gen = AcousticSignalGenerator(fs)
-    reference = gen.generate_pulse(pulse_ms / 1000.0, f0)
+    reference = gen.generate_chirp(
+        duration_seconds=chirp_ms / 1000.0,
+        start_freq_hz=f_start,
+        end_freq_hz=f_end,
+    )
     correlator = EchoCorrelator(fs)
 
     lags_d, corr_d = correlator.correlate_direct(reference, received)
     lags_f, corr_f = correlator.correlate_fft(reference, received)
 
-    # Ignorar acoplamiento directo: solo lags >= min_lag
-    def peak_from(lags: np.ndarray, corr: np.ndarray) -> tuple[int, float, float]:
+    def peak_from(lags: np.ndarray, corr: np.ndarray) -> tuple[int, float, float, float]:
         mask = lags >= min_lag
         if not np.any(mask):
             raise ValueError("min_lag fuera de rango de correlación.")
@@ -116,20 +133,23 @@ def estimate_distance(
         idxs = np.flatnonzero(mask)
         idx = int(idxs[idx_local])
         lag = int(lags[idx])
-        tau = blank_ms / 1000.0 + lag / fs
-        dist = 343.0 * tau / 2.0
-        return lag, tau, dist
+        tau = lag / fs
+        dist = SPEED_OF_SOUND_M_S * tau / 2.0
+        peak = float(corr[idx])
+        return lag, tau, dist, peak
 
-    lag_d, tau_d, dist_d = peak_from(lags_d, corr_d)
-    lag_f, tau_f, dist_f = peak_from(lags_f, corr_f)
+    lag_d, tau_d, dist_d, peak_d = peak_from(lags_d, corr_d)
+    lag_f, tau_f, dist_f, peak_f = peak_from(lags_f, corr_f)
 
     return {
         "lag_direct": lag_d,
         "tau_direct_s": tau_d,
         "dist_direct_m": dist_d,
+        "peak_direct": peak_d,
         "lag_fft": lag_f,
         "tau_fft_s": tau_f,
         "dist_fft_m": dist_f,
+        "peak_fft": peak_f,
         "lags_direct": lags_d,
         "corr_direct": corr_d,
         "lags_fft": lags_f,
@@ -142,6 +162,17 @@ def estimate_distance(
 def save_figures(result: dict, out_dir: Path, fs: float) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     t = np.arange(result["received"].size) / fs
+    t_ref = np.arange(result["reference"].size) / fs
+
+    fig, ax = plt.subplots(figsize=(9, 3.2))
+    ax.plot(t_ref * 1000.0, result["reference"])
+    ax.set_xlabel("Tiempo [ms]")
+    ax.set_ylabel("Amplitud")
+    ax.set_title("Señal de referencia (chirp lineal)")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_dir / "parte4_chirp_referencia.png", dpi=150)
+    plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(9, 3.2))
     ax.plot(t * 1000.0, result["received"])
@@ -154,12 +185,26 @@ def save_figures(result: dict, out_dir: Path, fs: float) -> None:
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(9, 3.2))
-    ax.plot(result["lags_direct"], result["corr_direct"], label="Directa")
-    ax.plot(result["lags_fft"], result["corr_fft"], "--", label="FFT")
-    ax.axvline(result["lag_fft"], color="r", alpha=0.5, label="Pico")
-    ax.set_xlabel("Lag [muestras]")
+    ax.plot(
+        result["lags_direct"] / fs * 1000.0,
+        result["corr_direct"],
+        label="Directa",
+    )
+    ax.plot(
+        result["lags_fft"] / fs * 1000.0,
+        result["corr_fft"],
+        "--",
+        label="FFT",
+    )
+    ax.axvline(
+        result["lag_fft"] / fs * 1000.0,
+        color="r",
+        alpha=0.5,
+        label=f"Pico FFT ({result['lag_fft']} muestras)",
+    )
+    ax.set_xlabel("Retardo [ms]")
     ax.set_ylabel("Correlación")
-    ax.set_title("Correlación cruzada (host, FFT propia)")
+    ax.set_title("Correlación cruzada (host, FFT propia — teoría del curso)")
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -168,8 +213,10 @@ def save_figures(result: dict, out_dir: Path, fs: float) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Host radar acústico Parte 4")
-    parser.add_argument("--port", type=str, default=None, help="Puerto Serial, ej. /dev/ttyACM0")
+    parser = argparse.ArgumentParser(
+        description="Host radar acústico: chirp + correlación FFT (Parte 4)"
+    )
+    parser.add_argument("--port", type=str, default=None, help="Puerto Serial, ej. COM3")
     parser.add_argument("--file", type=str, default=None, help="Archivo de dump Serial")
     parser.add_argument("--baud", type=int, default=9600)
     parser.add_argument(
@@ -186,29 +233,34 @@ def main() -> None:
         print(f"Leyendo de {args.port} ...")
         text = read_from_serial(args.port, args.baud)
     else:
-        raise SystemExit("Indica --port /dev/ttyACM0  o  --file captura.txt")
+        raise SystemExit("Indica --port COM3  o  --file captura.txt")
 
     meta, received = parse_dump_text(text)
-    fs = float(meta.get("FS", 8000))
-    f0 = float(meta.get("F0", 3000))
-    blank_ms = float(meta.get("BLANK_MS", 1))
-    min_lag = int(meta.get("MIN_LAG", 8))
+    fs = float(meta.get("FS", 16000))
+    f_start = float(meta.get("F_START", meta.get("F0", 2000)))
+    f_end = float(meta.get("F_END", 7000))
+    chirp_ms = float(meta.get("CHIRP_MS", 10))
+    min_lag = int(meta.get("MIN_LAG", 24))
 
-    # El dump del firmware ya viene sin DC si se hizo tras removeDc
-    result = estimate_distance(received, fs, f0, blank_ms, min_lag)
+    result = estimate_distance(received, fs, f_start, f_end, chirp_ms, min_lag)
     save_figures(result, Path(args.out), fs)
 
-    print("=== Resultado host (correlación Python) ===")
-    print(f"FS={fs} Hz  F0={f0} Hz  blank={blank_ms} ms  min_lag={min_lag}")
+    print("=== Resultado host (chirp + correlación Python) ===")
+    print(
+        f"FS={fs} Hz  chirp={chirp_ms} ms  "
+        f"f={f_start:.0f}→{f_end:.0f} Hz  min_lag={min_lag}"
+    )
     print(
         f"Directa: lag={result['lag_direct']}  "
         f"tau={result['tau_direct_s']*1000:.3f} ms  "
-        f"d={result['dist_direct_m']*100:.1f} cm"
+        f"d={result['dist_direct_m']*100:.1f} cm  "
+        f"peak={result['peak_direct']:.1f}"
     )
     print(
         f"FFT:     lag={result['lag_fft']}  "
         f"tau={result['tau_fft_s']*1000:.3f} ms  "
-        f"d={result['dist_fft_m']*100:.1f} cm"
+        f"d={result['dist_fft_m']*100:.1f} cm  "
+        f"peak={result['peak_fft']:.1f}"
     )
     print(f"Figuras en: {args.out}")
 
