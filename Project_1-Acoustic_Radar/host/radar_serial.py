@@ -236,11 +236,11 @@ def main() -> None:
         raise SystemExit("Indica --port COM3  o  --file captura.txt")
 
     meta, received = parse_dump_text(text)
-    fs = float(meta.get("FS", 16000))
+    fs = float(meta.get("FS", 8000))
     f_start = float(meta.get("F_START", meta.get("F0", 2000)))
-    f_end = float(meta.get("F_END", 7000))
-    chirp_ms = float(meta.get("CHIRP_MS", 10))
-    min_lag = int(meta.get("MIN_LAG", 24))
+    f_end = float(meta.get("F_END", 3500))
+    chirp_ms = float(meta.get("CHIRP_MS", 5))
+    min_lag = int(meta.get("MIN_LAG", 10))
 
     result = estimate_distance(received, fs, f_start, f_end, chirp_ms, min_lag)
     save_figures(result, Path(args.out), fs)

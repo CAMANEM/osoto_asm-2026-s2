@@ -1,7 +1,7 @@
 # Proyecto Individual 1 — Radar acústico (CE1110)
 
 Código para las **Partes 2–3** (simulación Python) y la **Parte 4**
-(implementación en Arduino Uno + host de correlación FFT).
+(implementación en Arduino Uno: chirp + **correlación por FFT onboard** + host opcional).
 
 ## Estructura
 
@@ -41,8 +41,10 @@ Figuras → `outputs/images/`.
 1. Abre `firmware/acoustic_radar/acoustic_radar.ino` en Arduino IDE.
 2. Sube al Uno.
 3. Serial Monitor a **9600 baud**.
-4. Al arrancar entra en **modo continuo** (mide en bucle + filtro EMA).
-5. Abre **Serial Plotter** (9600) para ver `raw_cm` y `filt_cm` en vivo.
+4. Al arrancar queda en **CONTINUO OFF** (estable). Cada distancia se calcula **en el Arduino**
+   con correlación por FFT int16:
+   `r = IFFT( conj(FFT(ref)) * FFT(rx) )`.
+5. Envía `M` para una medida, o `C` para continuo + Serial Plotter (`raw_cm` / `filt_cm`).
 6. Comandos: `C` continuo ON · `X` parar · `M` detalle · `D` dump CSV · `S` OFF.
 
 Salida continua (Serial Plotter):
@@ -52,13 +54,22 @@ raw_cm:52.1,filt_cm:50.8,lag:47,peak:...
 raw_cm:49.3,filt_cm:50.2,lag:46,peak:...
 ```
 
-### Host Python (correlación FFT — teoría Partes 2–3)
+Salida `M` (detalle):
 
-El host reconstruye el mismo chirp lineal y aplica:
+```
+--- Medicion FFT (Arduino) ---
+method=FFT_corr
+fft_n=128
+lag_samples=...
+tau_ms=...
+distancia_cm=...
+OK
+```
 
-`r = IFFT( conj(FFT(ref)) * FFT(rx) )`
+### Host Python (verificación cruzada con FFT de Partes 2–3)
 
-con la FFT propia del proyecto (`signal_processing/`).
+El host puede re-procesar el dump (`D`) con la misma FFT propia de Python
+para contrastar contra el resultado onboard.
 
 ```bash
 # Windows (ejemplo):
@@ -86,8 +97,10 @@ Figuras → `outputs/images_parte4/` (chirp de referencia, RX, correlación dire
 | Constante        | Default | Efecto                                              |
 |------------------|---------|-----------------------------------------------------|
 | `F_START_HZ`     | 2000    | Inicio del chirp lineal (Hz)                        |
-| `F_END_HZ`       | 7000    | Fin del chirp (bajo Nyquist a 16 kHz)               |
-| `CHIRP_MS`       | 10      | Duración del chirp (más largo que el tono de 1 ms)  |
-| `MIN_LAG`        | 24      | Ignora acoplamiento directo (~1.5 ms)               |
-| `N_SAMPLES`      | 320     | Ventana RX (~20 ms ≈ hasta ~3.4 m teóricos)         |
-| `FS_HZ`          | 16000   | Muestreo (coherente con `SAMPLE_US=62`)             |
+| `F_END_HZ`       | 3500    | Fin del chirp (bajo Nyquist a 8 kHz)                |
+| `CHIRP_MS`       | 5       | Duración del chirp (como en el adelanto)            |
+| `FFT_N`          | 128     | Tamaño FFT radix-2 onboard                          |
+| `MIN_LAG`        | 10      | Ignora acoplamiento directo (~1.25 ms)              |
+| `N_SAMPLES`      | 88      | Ventana RX (~11 ms ≈ hasta ~1.3 m)                  |
+| `FS_HZ`          | 8000    | Muestreo (`SAMPLE_US=125`)                          |
+| `CONT_GAP_MS`    | 300     | Silencio entre disparos (anti-reverberación)        |
