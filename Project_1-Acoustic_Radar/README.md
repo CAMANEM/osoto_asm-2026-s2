@@ -1,79 +1,89 @@
-# Taller Semana 5 — Experimentación de detección de ecos
+# Proyecto Individual 1 — Radar acústico (CE1110)
 
-Código de apoyo para el **Taller de Proyecto Individual 1** (CE1110 —
-Análisis de Señales Mixtas), que cubre la **Parte 2 (experimentos con
-FFT)** y la **Parte 3 (experimentos de detección de ecos)** del enunciado
-del Proyecto Individual 1 (radar acústico).
+Código para las **Partes 2–3** (simulación Python) y la **Parte 4**
+(implementación en Arduino Uno + host de correlación FFT).
 
-## Estructura del proyecto
+## Estructura
 
 ```
-radar_acustico/
-├── signal_processing/
-│   ├── fourier_transform.py   # DFT y FFT (Cooley-Tukey) propias
-│   └── correlator.py          # Correlación cruzada directa y por FFT
-├── generation/
-│   └── signal_generator.py    # Pulsos, chirps, ecos simulados, ruido
+Project_1-Acoustic_Radar/
+├── signal_processing/          # DFT/FFT propias + correlación
+├── generation/                 # Pulsos, chirps, ecos sintéticos
 ├── benchmarking/
-│   └── benchmark.py           # Comparación de tiempos DFT/FFT y correlación
 ├── visualization/
-│   └── visualizer.py          # Generación y guardado de gráficas
-├── main_parte2_fft.py         # Orquesta la Parte 2
-├── main_parte3_ecos.py        # Orquesta la Parte 3
-└── main.py                    # Ejecuta ambas partes
+├── firmware/acoustic_radar/    # Sketch Arduino Uno (Parte 4–5)
+├── host/radar_serial.py        # Lee Serial y correlaciona con FFT propia
+├── main_parte2_fft.py
+├── main_parte3_ecos.py
+└── main.py
 ```
 
-## Requerimientos
-
-```bash
-numpy>=1.24
-matplotlib>=3.7
-```
-
-## Instalación
+## Partes 2 y 3 (Python)
 
 ```bash
 pip install -r requirements.txt
-```
-
-## Ejecución
-
-```bash
-# Ejecuta ambas partes:
 python main.py
-
-# O cada parte por separado:
+# o:
 python main_parte2_fft.py
 python main_parte3_ecos.py
 ```
 
-Las imágenes generadas ("recopilación de imágenes con los efectos
-principales" que pide el enunciado) se guardan automáticamente en
-`outputs/images/`.
+Figuras → `outputs/images/`.
 
-## Qué cubre cada parte
+## Parte 4 — Microcontrolador
 
-**Parte 2 — Experimentos con FFT**
-- Implementación propia de DFT (fuerza bruta, O(N²)) y FFT
-  (Cooley-Tukey, O(N log N)), sin usar `numpy.fft` internamente.
-- Comparación de tiempos de ejecución DFT vs. FFT para N = 64…4096.
-- Magnitud y fase de un tono puro, una señal multi-tono y un chirp.
+### Hardware
+- **TX:** D9 → 1 kΩ → Base 2N2222; Emitter → GND; Collector → parlante → 47–100 Ω → 5V
+- **RX:** Electret + LM358 (Circuit Basics) → A0
+- GND común
 
-**Parte 3 — Experimentos de detección de ecos**
-- Generación de una señal transmitida (chirp) y un eco simulado con
-  retardo y atenuación conocidos, más ruido gaussiano.
-- Correlación cruzada directa (definición en el tiempo).
-- Correlación cruzada acelerada por FFT (teorema de convolución).
-- Estimación del retardo (tiempo de vuelo) y de la distancia
-  equivalente (`d = v_s·τ/2`).
-- Comparación de tiempos entre ambas implementaciones de correlación.
+### Firmware
+1. Abre `firmware/acoustic_radar/acoustic_radar.ino` en Arduino IDE.
+2. Sube al Uno.
+3. Serial Monitor a **9600 baud**.
+4. Envía `M` + Enter → una medición (FFT peak + correlación + distancia).
+5. Envía `D` + Enter → dump CSV de la última captura.
 
-## Notas de diseño
+Salida típica:
 
-- Paradigma orientado a objetos: cada responsabilidad (transformadas,
-  correlación, generación de señales, benchmarking, visualización) vive
-  en su propia clase con estado y comportamiento cohesivos.
-- Docstrings en estilo Javadoc (`@param`, `@return`, `@throws`) para
-  facilitar la trazabilidad de cada método.
-- Sin dependencia de `numpy.fft` en la lógica de transformada: la DFT y
-  la FFT son implementaciones propias, tal como exige el enunciado.
+```
+--- Medicion ---
+FFT_peak_Hz=3000.0
+lag_samples=23
+corr_peak=...
+tau_ms=3.875
+distancia_cm=66.5
+distancia_m=0.665
+OK
+```
+
+### Host Python (correlación FFT con tu código de Partes 2–3)
+
+```bash
+# Detecta el puerto (Linux): ls /dev/ttyACM*  o  /dev/ttyUSB*
+python host/radar_serial.py --port /dev/ttyACM0
+```
+
+O pega el dump Serial en un archivo:
+
+```bash
+python host/radar_serial.py --file captura.txt
+```
+
+Figuras → `outputs/images_parte4/`.
+
+### Prueba de defensa (rápida)
+1. Objeto rígido (caja/libro) a **~50 cm** y luego **~100 cm**.
+2. Mic y parlante juntos, apuntando al objeto (no uno contra el otro).
+3. Ambiente quieto.
+4. Compara `distancia_cm` al mover el objeto: debe cambiar en el sentido correcto
+   (no esperes precisión de cm exactos en el MVP).
+
+### Parámetros ajustables en el `.ino`
+| Constante   | Default | Efecto                                      |
+|-------------|---------|---------------------------------------------|
+| `F0_HZ`     | 3000    | Frecuencia del pulso TX                     |
+| `BLANK_MS`  | 1       | Espera antes de muestrear                   |
+| `MIN_LAG`   | 8       | Ignora acoplamiento directo (~1 ms)         |
+| `N_SAMPLES` | 256     | Ventana RX (~32 ms ≈ hasta ~5 m teóricos)   |
+| `FS_HZ`     | 8000    | Muestreo (coherente con `SAMPLE_US=125`)    |
